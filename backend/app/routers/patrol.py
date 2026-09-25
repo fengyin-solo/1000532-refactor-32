@@ -30,6 +30,12 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/stats")
+def patrol_stats(month: str | None = Query(default=None, description="按月份统计，格式 YYYY-MM，默认本月")) -> dict[str, Any]:
+    """巡视合计：发现问题、整改项与超时巡视共用列表/详情的同一口径，作废巡视单不计入。"""
+    return service.stats(month=month)
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条巡视单明细；不存在时给出可读的错误说明。"""
@@ -50,9 +56,13 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条巡视单执行派发巡视、提交结果、作废巡视；不允许的动作会被拦下并说明原因。"""
+    """对单条巡视单执行派发巡视、提交结果、作废巡视；不允许的动作会被拦下并说明原因。
+
+    提交结果时可在 values 里带巡视时长与问题明细，数字由服务端按明细一次性
+    计算并冻结；重复提交或对已提交单再动作都会被拒绝。
+    """
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    entry, message = service.run_action(entry_id, action, payload.values)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
