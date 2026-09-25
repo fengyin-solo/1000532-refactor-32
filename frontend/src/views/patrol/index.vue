@@ -65,18 +65,19 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 
-import { request } from '@/api/client'
+import { fetchJson, request } from '@/api/client'
 
 type Row = Record<string, string | number | null>
+type StatCard = { label: string; value: number }
 
 const ENDPOINT = '/api/patrol'
-const columns = ["巡视单号", "巡视路线", "巡视人员", "巡视日期", "发现问题数", "整改项数", "巡视时长", "巡视状态"]
+const columns = ["巡视单号", "巡视路线", "巡视人员", "巡视日期", "发现问题数", "整改项数", "巡视时长", "超时标记", "巡视状态"]
 const actions = ["派发巡视", "提交结果", "作废巡视"]
 const statuses = ["待派发", "巡视中", "已提交", "已作废"]
-const stats = [{"label": "待派发巡视", "value": 0}, {"label": "巡视中任务", "value": 0}, {"label": "本月发现问题", "value": 0}]
 
 const rows = ref<Row[]>([])
 const total = ref(0)
+const stats = ref<StatCard[]>([])
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
@@ -96,13 +97,28 @@ function openCreate() {
 
 async function runAction(action: string, row: Row) {
   errorMessage.value = ''
+  const values: Record<string, string> = { action }
+  if (action === '提交结果') {
+    const found = window.prompt('本次巡视发现问题数（非负整数）', String(row['发现问题数'] ?? 0))
+    if (found === null) return
+    const fixed = window.prompt('其中需整改的项数（非负整数）', String(row['整改项数'] ?? 0))
+    if (fixed === null) return
+    const hours = window.prompt('巡视时长（小时，可留空）', String(row['巡视时长'] ?? ''))
+    if (hours === null) return
+    values['发现问题数'] = found
+    values['整改项数'] = fixed
+    if (hours.trim() !== '') {
+      values['巡视时长'] = hours
+    }
+  }
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ values }),
     })
-    if (!response.ok) {
-      throw new Error('巡视检查动作未生效，请稍后重试')
+    const result = await response.json()
+    if (!response.ok || !result.ok) {
+      throw new Error(result.message || '巡视检查动作未生效，请稍后重试')
     }
     await reload()
   } catch (error) {
@@ -114,15 +130,15 @@ async function reload() {
   errorMessage.value = ''
   const query = new URLSearchParams(filters.value as Record<string, string>).toString()
   try {
-    const response = await request(`${ENDPOINT}?${query}`)
-    if (!response.ok) {
-      throw new Error('巡视单列表读取失败')
-    }
-    const payload = await response.json()
-    rows.value = payload.items ?? []
-    total.value = payload.total ?? rows.value.length
+    const [listPayload, statsPayload] = await Promise.all([
+      fetchJson<{ items?: Row[]; total?: number }>(`${ENDPOINT}?${query}`),
+      fetchJson<{ cards?: StatCard[] }>(`${ENDPOINT}/stats`),
+    ])
+    rows.value = listPayload.items ?? []
+    total.value = listPayload.total ?? rows.value.length
+    stats.value = statsPayload.cards ?? []
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '巡视检查列表读取失败'
+    errorMessage.value = error instanceof Error ? error.message : '巡视检查数据读取失败'
   }
 }
 
